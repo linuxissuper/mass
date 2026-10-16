@@ -1,0 +1,142 @@
+name: Build patched APK
+
+# Builds the latest upstream Android release with patches/*.patch applied and
+# publishes it as a GitHub release (for Komi Store / Obtainium). A release tag
+# encodes upstream tag + patches hash, so nothing is rebuilt until one changes.
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  push:
+    branches: [patched]
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Upstream tag or branch to build (empty = latest android-v* release)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-patched
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/music-assistant/mobile-app
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout patches
+        uses: actions/checkout@v6
+        with:
+          path: fork
+
+      - name: Resolve upstream ref
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          REF="${INPUT_REF:-}"
+          PRERELEASE=true
+          if [ -z "$REF" ]; then
+            REF=$(git ls-remote --tags --refs "$UPSTREAM" 'android-v*' | sed 's|.*refs/tags/||' | sort -V | tail -1)
+            PRERELEASE=false
+          fi
+          PATCHES=$(git -C fork rev-parse --short HEAD:patches)
+          TAG="${REF//\//-}-patched-${PATCHES}"
+          {
+            echo "ref=$REF"
+            echo "tag=$TAG"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Building $TAG"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout upstream
+        if: steps.ref.outputs.exists == 'false'
+        uses: actions/checkout@v6
+        with:
+          repository: music-assistant/mobile-app
+          ref: ${{ steps.ref.outputs.ref }}
+          path: src
+          # Full history so `git am --3way` can fall back to a three-way merge.
+          fetch-depth: 0
+
+      - name: Apply patches
+        if: steps.ref.outputs.exists == 'false'
+        working-directory: src
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git am --3way ../fork/patches/*.patch
+
+      - name: Set up JDK 21
+        if: steps.ref.outputs.exists == 'false'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Restore signing key
+        if: steps.ref.outputs.exists == 'false'
+        working-directory: src/androidApp
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Secret KEYSTORE_BASE64 is not set (see README)."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+          cat > keystore.properties <<EOF
+          storeFile=release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Build release APK
+        if: steps.ref.outputs.exists == 'false'
+        working-directory: src
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :androidApp:assembleRelease
+
+      - name: Publish release
+        if: steps.ref.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ steps.ref.outputs.ref }}
+          TAG: ${{ steps.ref.outputs.tag }}
+          PRERELEASE: ${{ steps.ref.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          APK=$(ls src/androidApp/build/outputs/apk/release/*.apk | head -1)
+          OUT="music-assistant-patched-${TAG#android-v}.apk"
+          cp "$APK" "$OUT"
+          {
+            echo "Upstream: [$REF]($UPSTREAM/tree/$REF)"
+            echo
+            echo "Patches:"
+            for p in fork/patches/*.patch; do
+              echo "- $(sed -n 's/^Subject: \(\[PATCH[^]]*\] \)\{0,1\}//p' "$p" | head -1)"
+            done
+          } > notes.md
+          FLAGS=()
+          [ "$PRERELEASE" = true ] && FLAGS+=(--prerelease)
+          gh release create "$TAG" "$OUT" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$TAG" --notes-file notes.md "${FLAGS[@]}"
