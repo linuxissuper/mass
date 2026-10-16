@@ -215,7 +215,7 @@ class AndroidAutoArtworkUriTest {
     )
 
     private companion object {
-        const val AUTHORITY = "io.music_assistant.client.autoartwork"
-        val DEFAULT_ICON: Uri = Uri.parse("android.resource://io.music_assistant.client/drawable/default")
+        const val AUTHORITY = "io.music_assistant.client.patched.autoartwork"
+        val DEFAULT_ICON: Uri = Uri.parse("android.resource://io.music_assistant.client.patched/drawable/default")
     }
 }

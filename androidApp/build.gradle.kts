@@ -185,3 +185,9 @@ androidComponents {
     }
 }
 
+// Fork build: its own application id, so it installs next to the official app
+// (which is signed with a different key).
+android.defaultConfig {
+    applicationId = "io.music_assistant.client.patched"
+    versionNameSuffix = "-patched"
+}
