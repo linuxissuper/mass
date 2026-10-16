@@ -128,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           APK=$(ls src/androidApp/build/outputs/apk/release/*.apk | head -1)
-          OUT="music-assistant-patched-${TAG#android-v}.apk"
+          OUT="music-assistant-${TAG#android-v}.apk"
           cp "$APK" "$OUT"
           {
             echo "Upstream: [$REF]($UPSTREAM/tree/$REF)"
