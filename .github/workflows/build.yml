@@ -97,10 +97,12 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::Secret KEYSTORE_BASE64 is not set (see README)."
-            exit 1
-          fi
+          for s in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!s}" ]; then
+              echo "::error::Secret $s is not set (see README)."
+              exit 1
+            fi
+          done
           echo "$KEYSTORE_BASE64" | base64 -d > release.jks
           cat > keystore.properties <<EOF
           storeFile=release.jks
